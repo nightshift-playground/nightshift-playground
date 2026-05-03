@@ -32,6 +32,7 @@ const DEFAULT_AGENT_PROFILES: AgentProfiles = {
 
 export interface CommandOptions {
   cwd?: string;
+  env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
 }
 
@@ -216,6 +217,7 @@ async function defaultExecFile(
 ): Promise<CommandResult> {
   const result = await execa(file, args, {
     cwd: options.cwd,
+    env: options.env,
     reject: false,
     signal: options.signal,
     stdin: 'ignore',

@@ -35,6 +35,12 @@ interface QualityGateCommand {
   summaryLabel: string;
 }
 
+interface DependencyPreparationCommand {
+  file: string;
+  args: string[];
+  summaryLabel: string;
+}
+
 export function buildBranchName(issueNumber: number, branchPrefix = DEFAULT_BRANCH_PREFIX): string {
   return `${branchPrefix}/issue-${issueNumber}`;
 }
@@ -140,7 +146,13 @@ export function createWorktreeActivities(deps: WorktreeActivityDeps) {
         };
       }
 
-      const result = await deps.execFile(command.file, command.args, { cwd: input.worktree.worktreePath });
+      const dependencyPreparationResult = await prepareDependenciesForQualityGate(deps, input.worktree.worktreePath);
+      if (dependencyPreparationResult) {
+        return dependencyPreparationResult;
+      }
+
+      const commandOptions = { cwd: input.worktree.worktreePath, env: buildQualityGateEnv(input.worktree.worktreePath) };
+      const result = await deps.execFile(command.file, command.args, commandOptions);
       const combinedLogs = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
       return {
         passed: result.exitCode === 0,
@@ -235,6 +247,91 @@ async function resolveQualityGateCommand(
   }
 
   return null;
+}
+
+async function prepareDependenciesForQualityGate(
+  deps: WorktreeActivityDeps,
+  worktreePath: string,
+): Promise<QualityGateResult | null> {
+  const command = await resolveDependencyPreparationCommand(deps, worktreePath);
+  if (!command) {
+    return null;
+  }
+
+  const result = await deps.execFile(command.file, command.args, {
+    cwd: worktreePath,
+    env: buildQualityGateEnv(worktreePath),
+  });
+  if (result.exitCode === 0) {
+    return null;
+  }
+
+  const combinedLogs = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+  return {
+    passed: false,
+    summary: `${command.summaryLabel} failed`,
+    logs: truncateQualityGateLogs(combinedLogs),
+  };
+}
+
+async function resolveDependencyPreparationCommand(
+  deps: WorktreeActivityDeps,
+  worktreePath: string,
+): Promise<DependencyPreparationCommand | null> {
+  const packageJsonPath = path.join(worktreePath, 'package.json');
+  if (!(await pathExists(deps, packageJsonPath))) {
+    return null;
+  }
+
+  if (await pathExists(deps, path.join(worktreePath, 'node_modules'))) {
+    return null;
+  }
+
+  if (await pathExists(deps, path.join(worktreePath, 'package-lock.json'))) {
+    return { file: 'npm', args: ['ci'], summaryLabel: 'npm ci' };
+  }
+
+  return { file: 'npm', args: ['install', '--no-package-lock'], summaryLabel: 'npm install --no-package-lock' };
+}
+
+function buildQualityGateEnv(worktreePath: string): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  const pathKey = findPathEnvKey(env);
+  if (!pathKey) {
+    return env;
+  }
+
+  env[pathKey] = sanitizePathForWorktree(env[pathKey], worktreePath);
+  return env;
+}
+
+function findPathEnvKey(env: NodeJS.ProcessEnv): string | undefined {
+  return Object.keys(env).find((key) => key.toLowerCase() === 'path');
+}
+
+function sanitizePathForWorktree(pathValue: string | undefined, worktreePath: string): string | undefined {
+  if (!pathValue) {
+    return pathValue;
+  }
+
+  const worktreeNodeBin = path.join(worktreePath, 'node_modules', '.bin');
+  const entries = pathValue.split(path.delimiter)
+    .filter((entry) => entry.length > 0)
+    .filter((entry) => !isExternalNodeModulesBin(entry, worktreePath));
+  return [worktreeNodeBin, ...entries.filter((entry) => path.resolve(entry) !== path.resolve(worktreeNodeBin))].join(path.delimiter);
+}
+
+function isExternalNodeModulesBin(entry: string, worktreePath: string): boolean {
+  const normalizedEntry = path.resolve(entry);
+  if (!normalizedEntry.endsWith(path.join('node_modules', '.bin'))) {
+    return false;
+  }
+  return !isPathInside(normalizedEntry, worktreePath);
+}
+
+function isPathInside(candidatePath: string, parentPath: string): boolean {
+  const relativePath = path.relative(path.resolve(parentPath), path.resolve(candidatePath));
+  return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
 }
 
 function hasMakeCheckTarget(makefileContents: string): boolean {

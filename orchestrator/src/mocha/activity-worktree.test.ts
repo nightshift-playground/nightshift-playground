@@ -1,4 +1,5 @@
 import assert from 'assert';
+import path from 'node:path';
 import { describe, it } from 'mocha';
 import type { WorktreeActivityDeps } from '../activity-deps';
 import { buildBranchName } from '../activities';
@@ -734,6 +735,122 @@ describe('worktree activities', () => {
     assert.ok(result.logs.length < 4200);
   });
 
+  it('runs npm ci before the quality gate when package-lock dependencies are not installed', async () => {
+    const worktree = buildWorktreeContext();
+    const commandCalls: Array<{ cwd?: string; args: string[]; path?: string }> = [];
+    const originalPath = process.env.PATH;
+    process.env.PATH = [
+      '/worker/node_modules/.bin',
+      '/usr/bin',
+      `${worktree.worktreePath}/node_modules/.bin`,
+    ].join(path.delimiter);
+
+    try {
+      const { runQualityGate } = createActivityTestRig({
+        worktree: {
+          access: async (targetPath) => {
+            const value = String(targetPath);
+            if (
+              value === `${worktree.worktreePath}/Makefile`
+              || value === `${worktree.worktreePath}/package.json`
+              || value === `${worktree.worktreePath}/package-lock.json`
+            ) {
+              return undefined;
+            }
+            throw createNotFoundError();
+          },
+          readFile: async () => 'check:\n\t@echo ok\n' as any,
+          execFile: async (file, args, options) => {
+            commandCalls.push({ cwd: options?.cwd, args: [String(file), ...args], path: options?.env?.PATH });
+            return { stdout: String(file) === 'make' ? 'ok' : 'installed', stderr: '', exitCode: 0 };
+          },
+        },
+      });
+
+      const result = await runQualityGate({ worktree });
+
+      assert.deepStrictEqual(commandCalls.map((call) => ({ cwd: call.cwd, args: call.args })), [
+        { cwd: worktree.worktreePath, args: ['npm', 'ci'] },
+        { cwd: worktree.worktreePath, args: ['make', 'check'] },
+      ]);
+      assert.ok(commandCalls.every((call) => call.path?.includes('/usr/bin')));
+      assert.ok(commandCalls.every((call) => call.path?.includes(`${worktree.worktreePath}/node_modules/.bin`)));
+      assert.ok(commandCalls.every((call) => !call.path?.includes('/worker/node_modules/.bin')));
+      assert.strictEqual(result.passed, true);
+      assert.strictEqual(result.summary, 'make check passed');
+      assert.strictEqual(result.logs, 'ok');
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it('reports dependency preparation failures without running the quality gate', async () => {
+    const worktree = buildWorktreeContext();
+    const commandCalls: Array<{ cwd?: string; args: string[] }> = [];
+    const { runQualityGate } = createActivityTestRig({
+      worktree: {
+        access: async (targetPath) => {
+          const value = String(targetPath);
+          if (
+            value === `${worktree.worktreePath}/Makefile`
+            || value === `${worktree.worktreePath}/package.json`
+            || value === `${worktree.worktreePath}/package-lock.json`
+          ) {
+            return undefined;
+          }
+          throw createNotFoundError();
+        },
+        readFile: async () => 'check:\n\t@echo ok\n' as any,
+        execFile: async (file, args, options) => {
+          commandCalls.push({ cwd: options?.cwd, args: [String(file), ...args] });
+          return { stdout: '', stderr: 'npm failed', exitCode: 1 };
+        },
+      },
+    });
+
+    const result = await runQualityGate({ worktree });
+
+    assert.deepStrictEqual(commandCalls, [
+      { cwd: worktree.worktreePath, args: ['npm', 'ci'] },
+    ]);
+    assert.strictEqual(result.passed, false);
+    assert.strictEqual(result.summary, 'npm ci failed');
+    assert.strictEqual(result.logs, 'npm failed');
+  });
+
+  it('reuses already-installed npm dependencies before the quality gate', async () => {
+    const worktree = buildWorktreeContext();
+    const commandCalls: Array<{ cwd?: string; args: string[] }> = [];
+    const { runQualityGate } = createActivityTestRig({
+      worktree: {
+        access: async (targetPath) => {
+          const value = String(targetPath);
+          if (
+            value === `${worktree.worktreePath}/Makefile`
+            || value === `${worktree.worktreePath}/package.json`
+            || value === `${worktree.worktreePath}/node_modules`
+          ) {
+            return undefined;
+          }
+          throw createNotFoundError();
+        },
+        readFile: async () => 'check:\n\t@echo ok\n' as any,
+        execFile: async (file, args, options) => {
+          commandCalls.push({ cwd: options?.cwd, args: [String(file), ...args] });
+          return { stdout: 'ok', stderr: '', exitCode: 0 };
+        },
+      },
+    });
+
+    const result = await runQualityGate({ worktree });
+
+    assert.deepStrictEqual(commandCalls, [
+      { cwd: worktree.worktreePath, args: ['make', 'check'] },
+    ]);
+    assert.strictEqual(result.passed, true);
+    assert.strictEqual(result.summary, 'make check passed');
+  });
+
   it('falls back to npm run check when package.json declares a check script', async () => {
     const worktree = buildWorktreeContext();
     const gitCalls: GitCall[] = [];
@@ -762,6 +879,7 @@ describe('worktree activities', () => {
     const result = await runQualityGate({ worktree });
 
     assert.deepStrictEqual(gitCalls, [
+      { cwd: worktree.worktreePath, args: ['npm', 'install', '--no-package-lock'] },
       { cwd: worktree.worktreePath, args: ['npm', 'run', 'check'] },
     ]);
     assert.strictEqual(result.passed, true);
