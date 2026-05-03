@@ -8,6 +8,14 @@ The orchestrator picks the top `Ready` issue from a GitHub Project v2, moves it 
 
 Scheduled pickup is enabled by default when the worker starts, so `Backlog` / `Ready` items can be started or resumed automatically through Temporal.
 
+## Workflow statuses
+
+- `Backlog` — work is captured but not yet ready to start.
+- `Ready` — work is prioritized and available for pickup.
+- `In progress` — work is actively being implemented.
+- `In review` — work is completed and awaiting review.
+- `Escalated` — work was raised for operator attention or intervention.
+
 ## Docs map
 
 - `orchestrator/README.md` — main operator guide: worker startup, config loading, manual intake, and scheduled pickup behavior
