@@ -1,45 +1,55 @@
 ## ADDED Requirements
 
 ### Requirement: Agent-authored messages include a footer
-The system SHALL render a footer on messages authored by an agent.
+The system SHALL render a footer for messages authored by an agent.
 
 #### Scenario: Render footer for agent-authored message
-- **Given** a message whose `author.type` is `agent`
-- **When** the message is rendered in the transcript
-- **Then** a footer is displayed beneath the message body
-- **And** the footer includes the agent display name
-- **And** the footer includes the agent role
+- **Given** a message with `author.type` equal to `agent`
+- **When** the message is rendered in a transcript surface
+- **Then** a footer is shown beneath the message body
+- **And** the footer contains the resolved display name
+- **And** the footer contains the resolved role
 
-### Requirement: Non-agent messages do not include an agent footer
+### Requirement: Agent footer format is deterministic
+The system SHALL render the footer text in the format `<displayName> · <role>`.
+
+#### Scenario: Footer uses display name and role
+- **Given** an agent-authored message with `author.displayName = "Runner"` and `author.role = "Implementer"`
+- **When** the message is rendered
+- **Then** the footer text is `Runner · Implementer`
+
+### Requirement: Footer rendering is resilient to missing metadata
+The system SHALL apply deterministic fallback text when optional agent metadata is absent.
+
+#### Scenario: Missing role
+- **Given** an agent-authored message with `author.displayName = "Runner"` and missing `author.role`
+- **When** the message is rendered
+- **Then** the footer text is `Runner · Unknown role`
+
+#### Scenario: Missing display name
+- **Given** an agent-authored message with missing `author.displayName` and `author.role = "Implementer"`
+- **When** the message is rendered
+- **Then** the footer text is `Agent · Implementer`
+
+#### Scenario: Missing both display name and role
+- **Given** an agent-authored message with missing `author.displayName` and missing `author.role`
+- **When** the message is rendered
+- **Then** the footer text is `Agent · Unknown role`
+
+### Requirement: Non-agent-authored messages do not include an agent footer
 The system SHALL NOT render the agent footer for messages not authored by an agent.
 
-#### Scenario: No footer for user-authored message
-- **Given** a message whose `author.type` is `user`
-- **When** the message is rendered in the transcript
-- **Then** no agent footer is displayed
-
-#### Scenario: No footer for system-authored message
-- **Given** a message whose `author.type` is `system`
-- **When** the message is rendered in the transcript
-- **Then** no agent footer is displayed
-
-### Requirement: Footer rendering is resilient to partial metadata
-The system SHALL render safely when optional agent metadata is absent.
-
-#### Scenario: Missing optional agent role
-- **Given** a message authored by an agent with a display name but no role
+#### Scenario: User-authored message
+- **Given** a message with `author.type` equal to `user`
 - **When** the message is rendered
-- **Then** a footer is still displayed
-- **And** the role text is `Unknown role`
+- **Then** no agent footer is shown
 
-#### Scenario: Missing optional agent display name
-- **Given** a message authored by an agent with a role but no display name
+#### Scenario: System-authored message
+- **Given** a message with `author.type` equal to `system`
 - **When** the message is rendered
-- **Then** a footer is still displayed
-- **And** the display name text is `Agent`
+- **Then** no agent footer is shown
 
-#### Scenario: Missing both optional fields
-- **Given** a message authored by an agent with neither display name nor role
+#### Scenario: Assistant-authored non-agent message
+- **Given** a message with `author.type` not equal to `agent`
 - **When** the message is rendered
-- **Then** a footer is still displayed
-- **And** the footer text is `Agent · Unknown role`
+- **Then** no agent footer is shown
